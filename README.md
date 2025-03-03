@@ -20,13 +20,14 @@ If you find the repo useful, please cite:
 H. Hu, Y. Yang, T. Wei and C. Liu
 "[Verification of Neural Control Barrier Functions with Symbolic Derivative Bounds Propagation](https://openreview.net/forum?id=jnubz7wB2w)", Conference on Robot Learning (CoRL). PMLR, 2024
 ```
-@inproceedings{
-hu2024verification,
-title={Verification of Neural Control Barrier Functions with Symbolic Derivative Bounds Propagation},
-author={Hanjiang Hu and Yujie Yang and Tianhao Wei and Changliu Liu},
-booktitle={8th Annual Conference on Robot Learning},
-year={2024},
-url={https://openreview.net/forum?id=jnubz7wB2w}
+@InProceedings{pmlr-v270-hu25a,
+  title = 	 {Verification of Neural Control Barrier Functions with Symbolic Derivative Bounds Propagation},
+  author =       {Hu, Hanjiang and Yang, Yujie and Wei, Tianhao and Liu, Changliu},
+  booktitle = 	 {Proceedings of The 8th Conference on Robot Learning},
+  pages = 	 {1797--1814},
+  year = 	 {2024},
+  volume = 	 {270},
+  publisher =    {PMLR},
 }
 ```
 
