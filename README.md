@@ -5,7 +5,7 @@ This is the official code for CoRL 2024 work "Verification of Neural Control Bar
 **We have released the Python implementation of data collection, neural CBF model training, and visualization to further facilitate the research community. Checkout [RUN_PYTHON.md](./python/RUN_PYTHON.md) for details.**
 
 ## Preparation
-The code is based on [Julia](https://julialang.org/) and is tested with Julia v1.9.4. Check [here](https://julialang.org/downloads/oldreleases/) to install Julia environment. Install `ModelVerification.jl` from [this repo](https://github.com/intelligent-control-lab/ModelVerification.jl) and check out the branch `verify_gradient` [here](https://github.com/intelligent-control-lab/ModelVerification.jl/tree/verify_gradient). Install `RobotZoo.jl` from [this repo](https://github.com/RoboticExplorationLab/RobotZoo.jl) and `TaylorModels.jl` from [here](https://github.com/JuliaIntervals/TaylorModels.jl).
+The code is based on [Julia](https://julialang.org/) and is tested with Julia v1.9.4. Check [here](https://julialang.org/downloads/oldreleases/) to install Julia environment. Install `ModelVerification.jl` from [this repo](https://github.com/intelligent-control-lab/ModelVerification.jl) and check out the branch `verify_gradient` [here](https://github.com/intelligent-control-lab/ModelVerification.jl/tree/verify_gradient). Install `RobotZoo.jl` from [this repo](https://github.com/RoboticExplorationLab/RobotZoo.jl) and `TaylorModels.jl` from [here](https://github.com/JuliaIntervals/TaylorModels.jl). 
 
 ## Data Collection
 To collect data for each robot dynamics, see Jupyter file `collect_data.ipynb` for details.
@@ -15,13 +15,13 @@ For the model training under Point Robot, see Jupyter file `train_naive_point.ip
 
 
 ## Verification of neural CBFs
-For the verificaiton under Dubins Car, see Jupyter file `verify_car.ipynb`. Similarly, `verify_point.ipynb` is for point robot and `verify_planar_quad.ipynb` is for planar quadrotor. Replace the corresponding path with `naive` or `adv` for different pre-trained models. Also, $\alpha$ and number of grids per dimension can also specified for ablation study. For baselines, specify `max_iter=1` in `BFS` mehtod to specify NNCB-IBP and otherwise, it is for BBV baseline. 
+For the verificaiton under Dubins Car, see Jupyter file `verify_car.ipynb`. Similarly, `verify_point.ipynb` is for point robot and `verify_planar_quad.ipynb` is for planar quadrotor. Replace the corresponding path with `naive` or `adv` for different pre-trained models. Also, $\alpha$ and number of grids per dimension can also specified for ablation study. For baselines, specify `max_iter=1` in `BFS` mehtod to specify NNCB-IBP and otherwise, it is for BBV baseline.  There is a tutorial example on `ModelVerification.jl` regarding verifying neural control barrier function [here](https://github.com/intelligent-control-lab/ModelVerification.jl/blob/main/tutorial/tutorial.ipynb).
 
 ## Citation 
 If you find the repo useful, please cite:
 
 H. Hu, Y. Yang, T. Wei and C. Liu
-"[Verification of Neural Control Barrier Functions with Symbolic Derivative Bounds Propagation](https://openreview.net/forum?id=jnubz7wB2w)", Conference on Robot Learning (CoRL). PMLR, 2024
+"[Verification of Neural Control Barrier Functions with Symbolic Derivative Bounds Propagation](https://proceedings.mlr.press/v270/hu25a.html)", Conference on Robot Learning (CoRL). PMLR, 2024
 ```
 @InProceedings{pmlr-v270-hu25a,
   title = 	 {Verification of Neural Control Barrier Functions with Symbolic Derivative Bounds Propagation},
