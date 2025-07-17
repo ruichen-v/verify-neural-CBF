@@ -6,6 +6,141 @@ from tqdm import tqdm
 from train_ncbf import  pgd_find_u_notce,forward_invariance_func
 from collect_data import Hyperrectangle, DubinsCar
 
+# class Hyperrectangle:
+#     """Python equivalent of the Julia Hyperrectangle class"""
+#     def __init__(self, low, high):
+#         self.low = np.array(low)
+#         self.high = np.array(high)
+    
+#     def vertices_list(self):
+#         """Generate all vertices of the hyperrectangle"""
+#         n = len(self.low)
+#         vertices = []
+        
+#         # Generate all combinations of low and high values
+#         for i in range(2**n):
+#             vertex = np.zeros_like(self.low)
+#             for j in range(n):
+#                 if (i >> j) & 1:
+#                     vertex[j] = self.high[j]
+#                 else:
+#                     vertex[j] = self.low[j]
+#             vertices.append(vertex)
+            
+#         return vertices
+
+# class DubinsCar:
+#     """Python equivalent of RobotZoo.DubinsCar()"""
+#     def __init__(self):
+#         self.n = 3  # state dimension [x, y, θ]
+#         self.m = 2  # control dimension [v, ω]
+    
+#     def dynamics(self, x, u):
+#         """Dynamics for Dubins Car: [ẋ, ẏ, θ̇] = [v*cos(θ), v*sin(θ), ω]"""
+#         x_dot = np.zeros_like(x)
+#         x_dot[0] = u[0] * np.cos(x[2])  # ẋ = v*cos(θ)
+#         x_dot[1] = u[0] * np.sin(x[2])  # ẏ = v*sin(θ)
+#         x_dot[2] = u[1]                 # θ̇ = ω
+#         return x_dot
+    
+#     def jacobian(self, x, u):
+#         """Compute the Jacobian of dynamics with respect to state and control"""
+#         A = np.zeros((self.n, self.n))
+#         B = np.zeros((self.n, self.m))
+        
+#         # State Jacobian (A)
+#         theta = x[2]
+        
+#         # ∂ẋ/∂θ = -v*sin(θ)
+#         A[0, 2] = -u[0] * np.sin(theta)
+        
+#         # ∂ẏ/∂θ = v*cos(θ)
+#         A[1, 2] = u[0] * np.cos(theta)
+        
+#         # Control Jacobian (B)
+#         # ∂ẋ/∂v = cos(θ)
+#         B[0, 0] = np.cos(theta)
+        
+#         # ∂ẏ/∂v = sin(θ)
+#         B[1, 0] = np.sin(theta)
+        
+#         # ∂θ̇/∂ω = 1
+#         B[2, 1] = 1.0
+        
+#         return A, B
+
+# def f_batch(A, x):
+#     """Compute Ax for each sample in batch"""
+#     return np.matmul(A, x)
+
+# def g_batch(B, u):
+#     """Compute Bu for each sample in batch"""
+#     return np.matmul(B, u)
+
+# def affine_dyn_batch(A, x, B, u, Delta=None):
+#     """Compute affine dynamics ẋ = Ax + Bu + Δ"""
+#     f_x = f_batch(A, x)
+#     g_u = g_batch(B, u)
+#     x_dot = f_x + g_u
+    
+#     if Delta is not None:
+#         x_dot = x_dot + Delta
+        
+#     return x_dot
+
+# def forward_invariance_func(model, A, x, B, u, alpha=0, Delta=None):
+#     """Compute the time derivative of phi along system trajectories plus a decay term: ϕ̇ + α*ϕ"""
+#     # Convert numpy arrays to torch tensors
+#     x_tensor = torch.tensor(x, dtype=torch.float32, requires_grad=True)
+    
+#     # Forward pass through the model
+#     phi_x = model(x_tensor)
+    
+#     # Compute gradient of phi with respect to x
+#     phi_x.backward(torch.ones_like(phi_x))
+#     gradients = x_tensor.grad.detach().numpy()
+    
+#     # Compute state derivatives
+#     x_dot = affine_dyn_batch(A, x, B, u, Delta)
+    
+#     # Compute ϕ̇ = ∇ϕᵀẋ (dot product of gradient and dynamics)
+#     phi_dot = np.sum(gradients * x_dot, axis=0, keepdims=True)
+    
+#     # Compute ϕ̇ + α*ϕ
+#     l = phi_dot + alpha * phi_x.detach().numpy()
+    
+#     return l
+
+# def pgd_find_u_notce(model, A, x, B, u_0, U, alpha=0, lr=1, num_iter=10, Delta=None):
+#     """Use projected gradient descent to find best-case control inputs"""
+#     u = u_0.copy()
+    
+#     for i in range(num_iter):
+#         # Compute forward invariance constraint gradient
+#         u_tensor = torch.tensor(u, dtype=torch.float32, requires_grad=True)
+        
+#         # This would require a custom function that computes forward_invariance_func with PyTorch tensors
+#         # For simplicity, we'll use finite differences to approximate the gradient
+#         epsilon = 1e-4
+#         l = forward_invariance_func(model, A, x, B, u, alpha, Delta)
+        
+#         # Compute gradient with respect to u using finite differences
+#         grad_u = np.zeros_like(u)
+#         for j in range(u.shape[0]):
+#             u_plus = u.copy()
+#             u_plus[j] += epsilon
+#             l_plus = forward_invariance_func(model, A, x, B, u_plus, alpha, Delta)
+#             grad_u[j] = (l_plus - l) / epsilon
+        
+#         # Update u
+#         u = u - lr * grad_u
+        
+#         # Project u back to the constraint set
+#         u = np.maximum(u, U.low[:u.shape[0]])
+#         u = np.minimum(u, U.high[:u.shape[0]])
+    
+#     return u
+
 def verification_forward(model, A, x, B, u_0, U, alpha=0, lr=1, num_iter=10, Delta=None):
     """Verify forward invariance by finding best-case control inputs"""
     # Compute forward invariance with initial control
@@ -198,7 +333,8 @@ def visualize_cbf(model, alpha=0.0, theta=0, v=1, w=1, pgd_lr=10, pgd_num_iter=1
     z1 = np.zeros((len(y), len(x)))
     for i, yi in tqdm(enumerate(y)):
         for j, xi in enumerate(x):
-            z1[i, j] = Phi_dot_naive_car(model, dyn_model, xi, yi, alpha=alpha, theta=theta, v=v, w=w)[0, 0]
+            # z1[i, j] = Phi_dot_naive_car(model, dyn_model, xi, yi, alpha=alpha, theta=theta, v=v, w=w)[0, 0]
+            z1[i, j] = Phi_naive_car(model, xi, yi,theta)
     
     # Create figure with 2x2 subplots
     fig, axes = plt.subplots(2, 2, figsize=(15, 15))
@@ -208,9 +344,9 @@ def visualize_cbf(model, alpha=0.0, theta=0, v=1, w=1, pgd_lr=10, pgd_num_iter=1
     axes[0, 0] = ax1
     contour = ax1.contourf(np.meshgrid(x, y)[0], np.meshgrid(x, y)[1], z1, levels=10, cmap='turbo')
     ax1.contour(np.meshgrid(x, y)[0], np.meshgrid(x, y)[1], z1, levels=[0], colors='black', linewidths=2)
-    ax1.set_title('CBF Derivative Contour')
+    ax1.set_title('CBF  Contour')
     plt.colorbar(contour, ax=ax1)
-    plt.savefig('CBF_Derivative_Contour.png', dpi=300)
+    plt.savefig('CBF_Contour.png', dpi=300)
     
     # Plot 2: Heatmap of CBF derivative
     _, ax2 = plot_env(X, X_unsafe)
@@ -219,7 +355,7 @@ def visualize_cbf(model, alpha=0.0, theta=0, v=1, w=1, pgd_lr=10, pgd_num_iter=1
                         origin='lower', aspect='auto', cmap='turbo')
     ax2.set_title('CBF Derivative Heatmap')
     plt.colorbar(heatmap, ax=ax2)
-    plt.savefig('CBF_Derivative_Heatmap.png', dpi=300)
+    plt.savefig('CBF_Heatmap.png', dpi=300)
     
     # Compute best-case CBF derivative
     print("Computing best-case CBF derivative...")
@@ -283,9 +419,6 @@ def load_model(model_path):
 if __name__ == "__main__":
     # Load your model
     model = load_model("car_naive_model_1_0_0.1_pgd_relu_20.pt")
-    
-    # For demonstration, create a dummy model
-    model = CBFModel()
     
     # Visualize CBF
     visualize_cbf(

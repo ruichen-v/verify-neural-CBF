@@ -13,6 +13,76 @@ from collect_data import DubinsCar, Hyperrectangle
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
+# class DubinsCar:
+#     def __init__(self):
+#         self.state_dim = 3  # state dimension
+#         self.control_dim = 2  # control dimension
+        
+#     def dynamics(self, x, u):
+#         """
+#         Dynamics for Dubins Car: [ẋ, ẏ, θ̇] = [v*cos(θ), v*sin(θ), ω]
+#         where v is forward velocity and ω is angular velocity
+#         """
+#         v = u[0]
+#         w = u[1]
+#         theta = x[2]
+        
+#         dx = torch.zeros_like(x)
+#         dx[0] = v * torch.cos(theta)  # ẋ = v*cos(θ)
+#         dx[1] = v * torch.sin(theta)  # ẏ = v*sin(θ)
+#         dx[2] = w                     # θ̇ = ω
+        
+#         return dx
+    
+#     def jacobian(self, x, u):
+#         """Compute the Jacobian of dynamics with respect to state and control"""
+#         batch_size = x.shape[0]
+#         A = torch.zeros(batch_size, self.n, self.n, device=x.device)
+#         B = torch.zeros(batch_size, self.n, self.m, device=x.device)
+        
+#         # State Jacobian (A)
+#         v = u[:, 0]
+#         theta = x[:, 2]
+        
+#         # ∂ẋ/∂θ = -v*sin(θ)
+#         A[:, 0, 2] = -v * torch.sin(theta)
+        
+#         # ∂ẏ/∂θ = v*cos(θ)
+#         A[:, 1, 2] = v * torch.cos(theta)
+        
+#         # Control Jacobian (B)
+#         # ∂ẋ/∂v = cos(θ)
+#         B[:, 0, 0] = torch.cos(theta)
+        
+#         # ∂ẏ/∂v = sin(θ)
+#         B[:, 1, 0] = torch.sin(theta)
+        
+#         # ∂θ̇/∂ω = 1
+#         B[:, 2, 1] = 1.0
+        
+#         return A, B
+
+# class Hyperrectangle:
+#     def __init__(self, low, high):
+#         self.low = torch.tensor(low, dtype=torch.float32)
+#         self.high = torch.tensor(high, dtype=torch.float32)
+    
+#     def vertices_list(self):
+#         """Generate all vertices of the hyperrectangle"""
+#         n = len(self.low)
+#         vertices = []
+        
+#         # Generate all combinations of low and high values
+#         for i in range(2**n):
+#             vertex = torch.zeros_like(self.low)
+#             for j in range(n):
+#                 if (i >> j) & 1:
+#                     vertex[j] = self.high[j]
+#                 else:
+#                     vertex[j] = self.low[j]
+#             vertices.append(vertex)
+            
+#         return vertices
 
 def f_batch(A, x):
     """
@@ -379,7 +449,7 @@ def prepare_data(raw_data):
     x_data = torch.tensor(np.column_stack([d[0] for d in raw_data]), dtype=torch.float32).to(device)
     u_data = torch.tensor(np.column_stack([d[1] for d in raw_data]), dtype=torch.float32).to(device)
     y_data = torch.tensor(np.array([d[2] for d in raw_data]), dtype=torch.float32).to(device)
-    return TensorDataset(x_data.t(), u_data.t(), y_data.reshape(1, -1).t())
+    return TensorDataset(x_data.t()[:1000,:], u_data.t()[:1000,:], y_data.reshape(1, -1).t()[:1000,:])
 
 
 # Main training function
@@ -406,7 +476,7 @@ def train_cbf():
         model.parameters(),
         lr=ini_lr,
         betas=(0.9, 0.999),
-        weight_decay=0.1
+        weight_decay=0.0
     )
     
     # Learning rate scheduler
@@ -537,7 +607,7 @@ def train_cbf():
             test_loss_epoch.append(test_loss.item())
         
         # Save model
-        torch.save(model.state_dict(), f"car_naive_model_{lambda_param}_{alpha}_{mu}_pgd_relu_{epoch}.pt")
+        torch.save(model.state_dict(), f"car_naive_model_1_0_0.1_pgd_relu_{epoch}.pt")
         
         # Compute average losses
         avg_train_loss = sum(training_loss_epoch) / len(training_loss_epoch)
