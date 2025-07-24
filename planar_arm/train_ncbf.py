@@ -7,82 +7,11 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pickle
 import os
-from collect_data import DubinsCar, Hyperrectangle
+from collect_data import PlanarArm, Hyperrectangle
 
 # Check if GPU is available
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-
-# class DubinsCar:
-#     def __init__(self):
-#         self.state_dim = 3  # state dimension
-#         self.control_dim = 2  # control dimension
-        
-#     def dynamics(self, x, u):
-#         """
-#         Dynamics for Dubins Car: [ẋ, ẏ, θ̇] = [v*cos(θ), v*sin(θ), ω]
-#         where v is forward velocity and ω is angular velocity
-#         """
-#         v = u[0]
-#         w = u[1]
-#         theta = x[2]
-        
-#         dx = torch.zeros_like(x)
-#         dx[0] = v * torch.cos(theta)  # ẋ = v*cos(θ)
-#         dx[1] = v * torch.sin(theta)  # ẏ = v*sin(θ)
-#         dx[2] = w                     # θ̇ = ω
-        
-#         return dx
-    
-#     def jacobian(self, x, u):
-#         """Compute the Jacobian of dynamics with respect to state and control"""
-#         batch_size = x.shape[0]
-#         A = torch.zeros(batch_size, self.n, self.n, device=x.device)
-#         B = torch.zeros(batch_size, self.n, self.m, device=x.device)
-        
-#         # State Jacobian (A)
-#         v = u[:, 0]
-#         theta = x[:, 2]
-        
-#         # ∂ẋ/∂θ = -v*sin(θ)
-#         A[:, 0, 2] = -v * torch.sin(theta)
-        
-#         # ∂ẏ/∂θ = v*cos(θ)
-#         A[:, 1, 2] = v * torch.cos(theta)
-        
-#         # Control Jacobian (B)
-#         # ∂ẋ/∂v = cos(θ)
-#         B[:, 0, 0] = torch.cos(theta)
-        
-#         # ∂ẏ/∂v = sin(θ)
-#         B[:, 1, 0] = torch.sin(theta)
-        
-#         # ∂θ̇/∂ω = 1
-#         B[:, 2, 1] = 1.0
-        
-#         return A, B
-
-# class Hyperrectangle:
-#     def __init__(self, low, high):
-#         self.low = torch.tensor(low, dtype=torch.float32)
-#         self.high = torch.tensor(high, dtype=torch.float32)
-    
-#     def vertices_list(self):
-#         """Generate all vertices of the hyperrectangle"""
-#         n = len(self.low)
-#         vertices = []
-        
-#         # Generate all combinations of low and high values
-#         for i in range(2**n):
-#             vertex = torch.zeros_like(self.low)
-#             for j in range(n):
-#                 if (i >> j) & 1:
-#                     vertex[j] = self.high[j]
-#                 else:
-#                     vertex[j] = self.low[j]
-#             vertices.append(vertex)
-            
-#         return vertices
 
 def f_batch(A, x):
     """
@@ -123,12 +52,11 @@ def affine_dyn_batch(A, x, B, u, Delta=None):
         
     return x_dot
 
-def forward_invariance_func(phi, A, x, B, u, alpha=0, Delta=None):
+def forward_invariance_func(phi, A, x, B, u, state_dim, control_dim, alpha=0, Delta=None):
     """
     Compute the time derivative of phi along system trajectories plus a decay term: ϕ̇ + α*ϕ
     """
     batch_size = x.shape[0]
-    state_dim = x.shape[1]
     
     # We need a clone of x with requires_grad=True for computing gradients
     if torch.is_tensor(x):
@@ -159,7 +87,11 @@ def forward_invariance_func(phi, A, x, B, u, alpha=0, Delta=None):
     )[0]
     
     # Compute state derivatives
-    x_dot = affine_dyn_batch(A, x, B, u, Delta=Delta)
+    # [x_dot, xobs_dot, vobs_dot]
+    x_arm_dot = affine_dyn_batch(A, x[:, :state_dim], B, u, Delta=Delta)
+    x_obs_dot = x[:, -2:]
+    vobs_dot = torch.zeros_like(x_obs_dot)
+    x_dot = torch.cat([x_arm_dot, x_obs_dot, vobs_dot], dim=1)  # [batch_size, 6]
     
     # Compute ϕ̇ = ∇ϕᵀẋ (dot product of gradient and dynamics)
     phi_dot = torch.sum(gradients * x_dot, dim=1, keepdim=True)
@@ -241,7 +173,7 @@ def loss_regularization(phi, x, y_init):
     
     return torch.mean(loss)
 
-def loss_naive_fi(phi, A, x, B, u, y_init, use_pgd=False, use_adv=False, alpha=0, lr=1, num_iter=10, epsilon=0.1, Delta=None):
+def loss_naive_fi(phi, A, x, B, u, y_init, state_dim, control_dim, use_pgd=False, use_adv=False, alpha=0, lr=1, num_iter=10, epsilon=0.1, Delta=None):
     """
     Compute forward invariance loss for the CBF
     """
@@ -314,11 +246,11 @@ def loss_naive_fi(phi, A, x, B, u, y_init, use_pgd=False, use_adv=False, alpha=0
     # If requested, find best-case control inputs
     u_best = u_boundary
     if use_pgd:
-        u_best = pgd_find_u_notce(phi, A_boundary, x_boundary, B_boundary, u_boundary, U, 
+        u_best = pgd_find_u_notce(phi, A_boundary, x_boundary, B_boundary, u_boundary, U, state_dim, control_dim,
                                  alpha=alpha, lr=lr, num_iter=num_iter, Delta=Delta_boundary)
     
     # Compute forward invariance constraint
-    fi_values = forward_invariance_func(phi, A_boundary, x_boundary, B_boundary, u_best, 
+    fi_values = forward_invariance_func(phi, A_boundary, x_boundary, B_boundary, u_best, state_dim, control_dim,
                                      alpha=alpha, Delta=Delta_boundary)
     
     # Loss is positive when constraint is violated (fi_values > 0)
@@ -326,7 +258,7 @@ def loss_naive_fi(phi, A, x, B, u, y_init, use_pgd=False, use_adv=False, alpha=0
     
     return torch.mean(loss)
 
-def pgd_find_u_notce(phi, A, x, B, u_0, U, alpha=0, lr=1, num_iter=10, Delta=None):
+def pgd_find_u_notce(phi, A, x, B, u_0, U, state_dim, control_dim, alpha=0, lr=1, num_iter=10, Delta=None):
     """
     Use projected gradient descent to find the best-case control input that minimizes the CBF derivative
     """
@@ -358,13 +290,13 @@ def pgd_find_u_notce(phi, A, x, B, u_0, U, alpha=0, lr=1, num_iter=10, Delta=Non
         
         # Compute forward invariance constraint
         # Note: We make sure x doesn't require gradients inside forward_invariance_func
-        fi_values = forward_invariance_func(phi, A, x, B, u, alpha=alpha, Delta=Delta)
+        fi_values = forward_invariance_func(phi, A, x, B, u, state_dim, control_dim, alpha=alpha, Delta=Delta)
         
         # We want to minimize the constraint value (find u that makes it most positive)
         loss = torch.mean(fi_values)
         
         # Compute gradients
-        loss.backward(retain_graph=True)
+        loss.backward(retain_graph=True) # ?
         
         # Update u
         optimizer.step()
@@ -376,7 +308,7 @@ def pgd_find_u_notce(phi, A, x, B, u_0, U, alpha=0, lr=1, num_iter=10, Delta=Non
     # Return the detached tensor
     return u.detach()
 
-def pgd_find_x_notce(phi, A, x_0, B, u, X_list, alpha=0, lr=0.01, num_iter=10, Delta=None):
+def pgd_find_x_notce(phi, A, x_0, B, u, X_list, state_dim, control_dim, alpha=0, lr=0.01, num_iter=10, Delta=None):
     """
     Use projected gradient descent to find the worst-case state that maximizes the CBF derivative
     """
@@ -394,7 +326,7 @@ def pgd_find_x_notce(phi, A, x_0, B, u, X_list, alpha=0, lr=0.01, num_iter=10, D
         optimizer.zero_grad()
         
         # Compute forward invariance constraint
-        fi_values = forward_invariance_func(phi, A, x, B, u, alpha=alpha, Delta=Delta)
+        fi_values = forward_invariance_func(phi, A, x, B, u, state_dim, control_dim, alpha=alpha, Delta=Delta)
         
         # We want to maximize the constraint value (find x that makes it most positive)
         loss = -torch.mean(fi_values)
@@ -430,9 +362,8 @@ class CBFModel(nn.Module):
         return self.model(x)
 
 # Define hyperrectangles
-X = Hyperrectangle(low=[0, 0, 0], high=[4, 4, np.pi],npy=False)
-U = Hyperrectangle(low=[-1, -1], high=[1, 1],npy=False)
-X_unsafe = Hyperrectangle(low=[1.5, 0, 0], high=[2.5, 2, np.pi],npy=False)
+X_init = Hyperrectangle(low=[0, 0], high=[np.pi/2.0, np.pi/2.0], npy=False)
+U = Hyperrectangle(low=[-1, -1], high=[1, 1], npy=False)
 
 # Function to load data
 def load_data(filename):
@@ -440,20 +371,24 @@ def load_data(filename):
         data = pickle.load(f)
     return data
 
-# Load training and test data
-raw_training_data = load_data("car_training_data.pkl")
-raw_test_data = load_data("car_test_data.pkl")
-
 # Prepare data for PyTorch
 def prepare_data(raw_data):
-    x_data = torch.tensor(np.column_stack([d[0] for d in raw_data]), dtype=torch.float32).to(device)
-    u_data = torch.tensor(np.column_stack([d[1] for d in raw_data]), dtype=torch.float32).to(device)
-    y_data = torch.tensor(np.array([d[2] for d in raw_data]), dtype=torch.float32).to(device)
-    return TensorDataset(x_data.t()[:1000,:], u_data.t()[:1000,:], y_data.reshape(1, -1).t()[:1000,:])
-
+    
+    xarm_data, uarm_data, xobs_data, uobs_data, y_data = map(np.array, zip(*raw_data))
+    xarm_data = torch.tensor(xarm_data, dtype=torch.float32).to(device) # [batch_size, 2]
+    uarm_data = torch.tensor(uarm_data, dtype=torch.float32).to(device) # [batch_size, 2]
+    xobs_data = torch.tensor(xobs_data, dtype=torch.float32).to(device) # [batch_size, 2]
+    uobs_data = torch.tensor(uobs_data, dtype=torch.float32).to(device) # [batch_size, 2]
+    y_data = torch.tensor(y_data, dtype=torch.float32).to(device) # [batch_size,]
+    
+    x_data = torch.concat([xarm_data, xobs_data, uobs_data], dim=1)  # [batch_size, 6]
+    u_data = uarm_data # [batch_size, 2]
+    y_data = y_data.reshape(-1, 1)  # [batch_size, 1]
+    
+    return TensorDataset(x_data, u_data, y_data)
 
 # Main training function
-def train_cbf():
+def train_cbf(train_data, test_data, name):
     # Hyperparameters
     batchsize = 128
     lambda_param = 1.0
@@ -468,7 +403,7 @@ def train_cbf():
     total_epoch = 20
     
     # Initialize model
-    state_dim = 3  # [x, y, theta] for DubinsCar
+    state_dim = 6  # [theta1, theta2, xobs, yobs, xobs_dot, yobs_dot] for 2d arm
     model = CBFModel(state_dim).to(device)
     
     # Initialize optimizer
@@ -487,11 +422,13 @@ def train_cbf():
     )
     
     # Create car dynamics model
-    dyn_model = DubinsCar()
+    dyn_model = PlanarArm()
+    state_dim = dyn_model.state_dim
+    control_dim = dyn_model.control_dim
     
     # Prepare data
-    training_dataset = prepare_data(raw_training_data)
-    test_dataset = prepare_data(raw_test_data)
+    training_dataset = prepare_data(train_data)
+    test_dataset = prepare_data(test_data)
     
     train_loader = DataLoader(training_dataset, batch_size=batchsize, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batchsize, shuffle=True)
@@ -509,15 +446,17 @@ def train_cbf():
         
         # Training loop
         for x_batch, u_batch, y_init_batch in tqdm(train_loader, desc=f"Training Epoch {epoch}"):
+            # x_batch: [batch_size, state+x_obs+v_obs]
+            
             x_batch = x_batch.to(device)
             u_batch = u_batch.to(device)
             y_init_batch = y_init_batch.to(device)
             
             # Compute linearized dynamics (A, B matrices) for each point in batch
             batch_size = x_batch.shape[0]
-            A_batch = torch.zeros(batch_size, dyn_model.state_dim, dyn_model.state_dim, device=device)
-            B_batch = torch.zeros(batch_size, dyn_model.state_dim, dyn_model.control_dim, device=device)
-            Delta = torch.zeros(batch_size, dyn_model.state_dim, device=device)
+            A_batch = torch.zeros(batch_size, state_dim, state_dim, device=device)
+            B_batch = torch.zeros(batch_size, state_dim, control_dim, device=device)
+            Delta = torch.zeros(batch_size, state_dim, device=device)
             
             # Get linearized dynamics for each state-control pair
             A_matrices, B_matrices = dyn_model.jacobian(x_batch, u_batch)
@@ -526,7 +465,7 @@ def train_cbf():
             
             # Compute residual term (Δ)
             for i in range(batch_size):
-                x_eps = x_batch[i] - eps
+                x_eps = x_batch[i, :state_dim] - eps
                 u_eps = u_batch[i] - eps
                 
                 # Compute actual dynamics
@@ -544,14 +483,16 @@ def train_cbf():
             # If using PGD, find best-case control inputs
             if use_pgd:
                 # with torch.no_grad():
-                u_best = pgd_find_u_notce(model, A_batch, x_batch, B_batch, u_batch, U, alpha=alpha, Delta=Delta)
+                u_best = pgd_find_u_notce(model, A_batch, x_batch, B_batch, u_batch, U,
+                                          state_dim, control_dim, alpha=alpha, Delta=Delta)
             
             # Zero gradients
             optimizer.zero_grad()
             
             # Compute losses
             safe_loss = loss_naive_safeset(model, x_batch, y_init_batch)
-            fi_loss = loss_naive_fi(model, A_batch, x_batch, B_batch, u_best, y_init_batch, use_pgd=False, alpha=alpha, Delta=Delta)
+            fi_loss = loss_naive_fi(model, A_batch, x_batch, B_batch, u_best, y_init_batch, state_dim, control_dim,
+                                    use_pgd=False, alpha=alpha, Delta=Delta)
             reg_loss = loss_regularization(model, x_batch, y_init_batch)
             
             # Total loss
@@ -585,7 +526,7 @@ def train_cbf():
             Delta = torch.zeros(batch_size, dyn_model.state_dim, device=device)
             
             for i in range(batch_size):
-                x_eps = x_batch[i] - eps
+                x_eps = x_batch[i, :state_dim] - eps
                 u_eps = u_batch[i] - eps
                 
                 # Compute actual dynamics
@@ -599,7 +540,8 @@ def train_cbf():
             
             # Compute losses
             safe_loss = loss_naive_safeset(model, x_batch, y_init_batch)
-            fi_loss = loss_naive_fi(model, A_batch, x_batch, B_batch, u_batch, y_init_batch, use_pgd=use_pgd, alpha=alpha, Delta=Delta)
+            fi_loss = loss_naive_fi(model, A_batch, x_batch, B_batch, u_batch, y_init_batch, state_dim, control_dim,
+                                    use_pgd=use_pgd, alpha=alpha, Delta=Delta)
             reg_loss = loss_regularization(model, x_batch, y_init_batch)
             
             # Total loss
@@ -607,7 +549,7 @@ def train_cbf():
             test_loss_epoch.append(test_loss.item())
         
         # Save model
-        torch.save(model.state_dict(), f"car_naive_model_1_0_0.1_pgd_relu_{epoch}.pt")
+        torch.save(model.state_dict(), f"{name}_{epoch}.pt")
         
         # Compute average losses
         avg_train_loss = sum(training_loss_epoch) / len(training_loss_epoch)
@@ -639,4 +581,10 @@ def plot_loss(train_loss, test_loss, xlabel="Epoch", ylabel="Loss", title="Train
 
 # Run the training
 if __name__ == "__main__":
-    model, training_losses, test_losses = train_cbf()
+    
+    batch = 'batch2'
+    
+    # Load training and test data
+    raw_training_data = load_data(os.path.join(batch, "data", "planar_arm_train_data.pkl"))
+    raw_test_data = load_data(os.path.join(batch, "data", "planar_arm_test_data.pkl"))
+    model, training_losses, test_losses = train_cbf(raw_training_data, raw_test_data, 'planar_arm')

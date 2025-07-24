@@ -8,6 +8,7 @@ import random
 import os, torch
 import copy
 import osqp
+import matplotlib.animation as animation
 # Check if GPU is available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
@@ -66,7 +67,7 @@ class PlanarArm:
         return np.zeros((self.state_dim, 1))
 
     def gx(self, x):
-        return np.ones((self.state_dim, self.control_dim))
+        return np.eye(2)
     
     def dynamics(self, x, u, npy=True):
         """Compute the dynamics for Dubins car model."""
@@ -83,7 +84,7 @@ class PlanarArm:
             if not torch.is_tensor(x): x = torch.tensor(x).to(device)
             fx = torch.from_numpy(self.fx(x)).to(device)
             gx = torch.from_numpy(self.gx(x)).to(device)
-            u = torch.tensor(u, dtype=torch.float32).to(device).reshape(-1, 1)
+            u = torch.tensor(u, dtype=torch.float64).to(device).reshape(-1, 1)
             x_dot = fx + gx @ u
             x_dot = x_dot.reshape(-1)
         
@@ -254,14 +255,14 @@ def qp_solver(u_ref, Q_u, Lg, Lf, phi, alpha, U : Hyperrectangle = None, abs_=1e
                 rho=0.1, adaptive_rho=True,
                 eps_abs=abs_, eps_rel=eps_,
                 max_iter=20000,
-                polish=True, verbose=False)
+                polish=False, verbose=False)
     result = prob.solve()
     
-    if result.info.status_val != osqp.constant.OSQP_SOLVED:
-        assert U is not None, "QP solver failed to find a solution with unbounded control"
-        return None
+    if result.info.status != 'solved':
+        # assert U is not None, "QP solver failed to find a solution with unbounded control"
+        return u_ref
     else:
-        return result.x.reshape(-1, 1)
+        return result.x.reshape(-1)
 
 def safe_control(u_ref, U, x, arm, x_obs, dmin, alpha):
     
@@ -284,10 +285,48 @@ def safe_control(u_ref, U, x, arm, x_obs, dmin, alpha):
     
     return u, phi
 
+class Obstacle:
+    def __init__(self, x, X, U, dt, T):
+        """
+        Initialize the obstacle.
+        Args:
+            x (np.ndarray): Initial position of the obstacle.
+            X (Hyperrectangle): State space of the obstacle.
+            U (Hyperrectangle): Control space of the obstacle.
+            dt (float): Discrete time step.
+            T (float): Frequency of changing velocity (in seconds).
+        """
+        self.x = np.array(x, dtype=np.float32)
+        self.X = X
+        self.U = U
+        self.dt = dt
+        self.T = T
+        self.time_elapsed = 0.0
+        self.v = random_point_in_hyperrectangle(U)  # Initial velocity
+
+    def step(self):
+        """
+        Move the obstacle by one time step.
+        """
+        # Resample velocity every T seconds
+        if self.time_elapsed >= self.T:
+            self.v = random_point_in_hyperrectangle(self.U)
+            self.time_elapsed = 0.0
+
+        # Update position
+        self.x += self.v * self.dt
+
+        # Ensure the obstacle stays within its state space
+        self.x = np.clip(self.x, self.X.low, self.X.high)
+        
+        self.time_elapsed += self.dt
+        
+        return self.x, self.v
+
 def generate_traj(
         x_0, x_goal, U, arm, kp, kd,
-        x_obs_0, X_obs, U_obs, dmin,
-        alpha,
+        x_obs_0, X_obs, U_obs, T_obs,
+        dmin, alpha,
         dt, traj_len_T
     ):
     """Generate a reference trajectory starting from x_0."""
@@ -301,7 +340,7 @@ def generate_traj(
     x_obs_traj = []
     u_obs_traj = []
     x_obs = copy.deepcopy(x_obs_0)
-    u_obs = np.zeros(2)
+    obstacle = Obstacle(x_obs, X_obs, U_obs, dt, T_obs)
     
     phi_traj = []
     
@@ -312,12 +351,13 @@ def generate_traj(
         
         # Safety filter
         u, phi = safe_control(u_ref=u_ref, U=U, x=x, arm=arm, x_obs=x_obs, dmin=dmin, alpha=alpha)
+        # u[:] = u_ref[:]
         
         # Update arm state using discrete dynamics
         x_next = arm.discrete_dynamics(x, u, 0.0, dt)
         
         # Sample obstacle motion
-        x_obs_next, u_obs = random_move_obstacle(x_obs, X_obs, U_obs, dt)
+        x_obs_next, u_obs = obstacle.step()
         
         # Record trajectory
         x_traj.append(x)
@@ -332,8 +372,9 @@ def generate_traj(
     
     return x_traj, u_traj, x_obs_traj, u_obs_traj, phi_traj
 
-def generate_random_trajs(dmodel, num_traj, dt, traj_len_T, X_init, X_goal, U, X_obs, U_obs, kp, kd, dmin, alpha):
+def generate_random_trajs(dmodel, num_traj, dt, traj_len_T, X_init, X_goal, U, X_obs, U_obs, T_obs, kp, kd, dmin, alpha):
     """Generate multiple random trajectories."""
+    x_goals = []  # Record x_goal for each trajectory
     x_trajs = []
     u_trajs = []
     x_obs_trajs = []
@@ -353,20 +394,37 @@ def generate_random_trajs(dmodel, num_traj, dt, traj_len_T, X_init, X_goal, U, X
         
         x_traj, u_traj, x_obs_traj, u_obs_traj, phi_traj = generate_traj(
             x_0=x_0, x_goal=x_goal, U=U, arm=dmodel, kp=kp, kd=kd,
-            x_obs_0=x_obs_0, X_obs=X_obs, U_obs=U_obs, dmin=dmin,
-            alpha=alpha,
+            x_obs_0=x_obs_0, X_obs=X_obs, U_obs=U_obs, T_obs=T_obs,
+            dmin=dmin, alpha=alpha,
             dt=dt, traj_len_T=traj_len_T
         )
+        x_goals.append(x_goal)  # Save x_goal
         x_trajs.append(x_traj)
         u_trajs.append(u_traj)
         x_obs_trajs.append(x_obs_traj)
         u_obs_trajs.append(u_obs_traj)
         phi_trajs.append(phi_traj)
     
-    return x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs
+    return x_goals, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs
 
-def build_dataset(name, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs, FI_steps, train_data_ratio):
-    """Build and save the dataset for training and testing."""
+def build_dataset(name, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs, FI_steps, train_data_ratio, root):
+    """
+    Build a dataset from the generated trajectories.
+    This function labels the data based on the safety specification phi,
+    and splits it into training and test sets.
+    Args:
+        name (str): Name of the dataset.
+        x_trajs (list): List of state trajectories.
+        u_trajs (list): List of control trajectories.
+        x_obs_trajs (list): List of obstacle state trajectories.
+        u_obs_trajs (list): List of obstacle control trajectories.
+        phi_trajs (list): List of safety specification values for each trajectory.
+        FI_steps (int): Number of steps to consider for FI.
+        train_data_ratio (float): Ratio of training data to total data.
+    Returns:
+        train_data (list): List of training data tuples (x, u, x_obs, u_obs, y).
+        test_data (list): List of test data tuples (x, u, x_obs, u_obs, y).
+    """
     data = []
     
     # label the data
@@ -389,13 +447,14 @@ def build_dataset(name, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs, F
         safe_traj = safe_trajs[i]
         
         # --------------------------- Collect nonFI states --------------------------- #
-        unsafe_ids = np.where(~safe_traj)[0]
+        unsafe_ids = np.where(~safe_traj)[0].tolist()
         if len(unsafe_ids) > 0:
-            X_data_nonFI.extend(x_trajs[i][unsafe_ids])
-            U_data_nonFI.extend(u_trajs[i][unsafe_ids])
-            Xobs_data_nonFI.extend(x_obs_trajs[i][unsafe_ids])
-            Uobs_data_nonFI.extend(u_obs_trajs[i][unsafe_ids])
-            Y_data_nonFI.extend(safe_trajs[i][unsafe_ids])
+            X_data_nonFI.extend([x_trajs[i][j] for j in unsafe_ids])
+            U_data_nonFI.extend([u_trajs[i][j] for j in unsafe_ids])
+            Xobs_data_nonFI.extend([x_obs_trajs[i][j] for j in unsafe_ids])
+            Uobs_data_nonFI.extend([u_obs_trajs[i][j] for j in unsafe_ids])
+            Y_data_nonFI.extend([safe_trajs[i][j] for j in unsafe_ids])
+
         # todo compare including safe states leading unsafe states
         
         # ----------------------------- Collect FI states ---------------------------- #
@@ -422,69 +481,125 @@ def build_dataset(name, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs, F
     data_nonFI = list(zip(X_data_nonFI, U_data_nonFI, Xobs_data_nonFI, Uobs_data_nonFI, Y_data_nonFI))
     
     # split into training and test sets
-    rand_ids_FI = np.random.permutation(num_FI)
-    data_FI_shuffled = data_FI[rand_ids_FI]
-    
-    rand_ids_nonFI = np.random.permutation(num_nonFI)
-    data_nonFI_shuffled = data_nonFI[rand_ids_nonFI]
+    random.shuffle(data_FI)
+    random.shuffle(data_nonFI)
     
     # Combine training and testing data
     num_FI_train = int(num_FI * train_data_ratio)
     num_nonFI_train = int(num_nonFI * train_data_ratio)
-    train_data = data_FI_shuffled[:num_FI_train] + data_nonFI_shuffled[:num_nonFI_train]
-    test_data = data_FI_shuffled[num_FI_train:] + data_nonFI_shuffled[num_nonFI_train:]
+    train_data = data_FI[:num_FI_train] + data_nonFI[:num_nonFI_train]
+    test_data = data_FI[num_FI_train:] + data_nonFI[num_nonFI_train:]
     
     # Shuffle the training and test data
     random.shuffle(train_data)
     random.shuffle(test_data)
     
     # Save to files
-    with open(f"data/{name}_training_data.pkl", "wb") as f:
+    with open(os.path.join(root, f"{name}_train_data.pkl"), "wb") as f:
         pickle.dump(train_data, f)
     
-    with open(f"data/{name}_test_data.pkl", "wb") as f:
+    with open(os.path.join(root, f"{name}_test_data.pkl"), "wb") as f:
         pickle.dump(test_data, f)
     
     print(f"Saved {len(train_data)} training samples and {len(test_data)} test samples")
     
     return train_data, test_data
 
-def plot_trajectories(Xrefs, title="Dubins Car Trajectories", max_traj=np.inf):
-    """Plot some of the generated trajectories."""
-    plt.figure(figsize=(10, 8))
-    
-    # Plot a subset of trajectories to avoid cluttering
-    for i in range(min(len(Xrefs), max_traj)):
-        x_coords = [x[0] for x in Xrefs[i]]
-        y_coords = [x[1] for x in Xrefs[i]]
-        plt.plot(x_coords, y_coords, 'b-', alpha=0.3)
-        
-        # Mark the starting point
-        plt.plot(x_coords[0], y_coords[0], 'go')
-    
-    # Plot the unsafe region
-    unsafe_x = [X_unsafe.low[0], X_unsafe.high[0], X_unsafe.high[0], X_unsafe.low[0], X_unsafe.low[0]]
-    unsafe_y = [X_unsafe.low[1], X_unsafe.low[1], X_unsafe.high[1], X_unsafe.high[1], X_unsafe.low[1]]
-    plt.plot(unsafe_x, unsafe_y, 'r-', linewidth=2)
-    
-    # Plot the domain
-    domain_x = [X.low[0], X.high[0], X.high[0], X.low[0], X.low[0]]
-    domain_y = [X.low[1], X.low[1], X.high[1], X.high[1], X.low[1]]
-    plt.plot(domain_x, domain_y, 'k-', linewidth=2)
-    
-    plt.title(title)
-    plt.xlabel('x position')
-    plt.ylabel('y position')
-    plt.grid(True)
-    plt.savefig(f"{title.lower().replace(' ', '_')}.png")
-    plt.show()
+def draw_arm(ax, arm, x, phi, color='blue'):
+    """Draw the arm given its state x."""
+    theta1, theta2 = x
+    l1, l2 = arm.l1, arm.l2
+
+    p1 = np.array([0, 0])
+    p2 = np.array([l1 * np.cos(theta1), l1 * np.sin(theta1)])
+    p3 = np.array([l1 * np.cos(theta1) + l2 * np.cos(theta1 + theta2),
+                    l1 * np.sin(theta1) + l2 * np.sin(theta1 + theta2)])
+
+    # Highlight links if phi is larger than zero
+    link1_color = 'orange' if phi[0] > 0 else color
+    link2_color = 'orange' if phi[1] > 0 else color
+
+    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=link1_color, linewidth=2)
+    ax.plot([p2[0], p3[0]], [p2[1], p3[1]], color=link2_color, linewidth=2)
+    ax.scatter([p1[0], p2[0], p3[0]], [p1[1], p2[1], p3[1]], color=color)
+
+def draw_obstacle(ax, x_obs, color='red'):
+    """Draw the obstacle as a point."""
+    ax.scatter(x_obs[0], x_obs[1], color=color, s=100)
+
+def draw_goal(ax, arm, x_goal, color='green'):
+    """Draw the goal position of the arm."""
+    theta1, theta2 = x_goal
+    l1, l2 = arm.l1, arm.l2
+
+    p1 = np.array([0, 0])
+    p2 = np.array([l1 * np.cos(theta1), l1 * np.sin(theta1)])
+    p3 = np.array([l1 * np.cos(theta1) + l2 * np.cos(theta1 + theta2),
+                    l1 * np.sin(theta1) + l2 * np.sin(theta1 + theta2)])
+
+    ax.scatter([p3[0]], [p3[1]], color=color, s=100, label="Goal")
+
+def animate_trajectory(x_traj, x_obs_traj, phi_traj, x_goal, arm, save_path, traj_id):
+    """Create an animation for a single trajectory."""
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_xlim(-arm.l1 - arm.l2 - 0.5, arm.l1 + arm.l2 + 0.5)
+    ax.set_ylim(-arm.l1 - arm.l2 - 0.5, arm.l1 + arm.l2 + 0.5)
+    ax.set_aspect('equal')
+    ax.set_title(f"Trajectory {traj_id}")
+
+    def update(frame):
+        ax.clear()
+        ax.set_xlim(-arm.l1 - arm.l2 - 0.5, arm.l1 + arm.l2 + 0.5)
+        ax.set_ylim(-arm.l1 - arm.l2 - 0.5, arm.l1 + arm.l2 + 0.5)
+        ax.set_aspect('equal')
+        draw_arm(ax, arm, x_traj[frame], phi_traj[frame])
+        draw_obstacle(ax, x_obs_traj[frame])
+        draw_goal(ax, arm, x_goal)
+
+    ani = animation.FuncAnimation(fig, update, frames=len(x_traj), interval=100)
+    ani.save(os.path.join(save_path, f"traj_{traj_id}.gif"), writer='imagemagick')
+    plt.close(fig)
+
+def plot_trajectories(x_goals, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs, arm, num_to_save, save_path):
+    '''
+    Plot the trajectories of the arm and obstacles.
+    Plot arm, obstacle, and goal, and save the animation in gif.
+    '''
+
+    # Randomly pick trajectories to save
+    selected_indices = random.sample(range(len(x_trajs)), num_to_save)
+    for idx in selected_indices:
+        animate_trajectory(x_trajs[idx], x_obs_trajs[idx], phi_trajs[idx], x_goals[idx], arm, save_path, idx)
 
 # Main execution
 if __name__ == "__main__":
     # Set random seed for reproducibility
-    np.random.seed(42)
-    random.seed(42)
+    np.random.seed(24)
+    random.seed(24)
     
+    # Paths for saving data and plots
+    exp_name = "batch2"
+    data_path = os.path.join(exp_name, "data")
+    plot_path = os.path.join(exp_name, "viz")
+    num_to_save = 10  # Number of trajectories to save for visualization
+
+    # Create directories if they don't exist
+    os.makedirs(data_path, exist_ok=True)
+    os.makedirs(plot_path, exist_ok=True)
+    
+    # -------------------- Hyperparameters for tuning --------------------
+    num_traj = int(1e3)          # Number of trajectories to generate
+    dt = 0.1               # Time step for simulation
+    traj_len_T = 10.0      # Total trajectory length in seconds
+    T_obs = 2.0            # Time interval for obstacle velocity change
+    kp = 1.0               # Proportional gain for PD control
+    kd = 0.01              # Derivative gain for PD control
+    dmin = 0.2             # Safety margin
+    alpha = 10.0          # Safety filter parameter
+    FI_steps = 50          # Number of steps to consider for FI
+    train_data_ratio = 0.6 # Ratio of training data to total data
+
+    # -------------------- Define dynamic model and spaces --------------------
     # Create the dynamic model
     arm = PlanarArm()
     
@@ -493,35 +608,34 @@ if __name__ == "__main__":
     X_goal = Hyperrectangle(low=[0, 0], high=[np.pi/2.0, np.pi/2.0])
     U = Hyperrectangle(low=[-1, -1], high=[1, 1])
     
-    # obstacle state and control
+    # Obstacle state and control spaces
     X_obs = Hyperrectangle(low=[0, 0], high=[arm.l1+arm.l2, arm.l1+arm.l2])
     U_obs = Hyperrectangle(low=[-0.5, -0.5], high=[0.5, 0.5])
     
-    # Safety margin
-    dmin = 0.2
-    
-    # Generate trajectories
+    # -------------------- Generate trajectories --------------------
     print("Generating random trajectories...")
-    x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs = generate_random_trajs(
+    x_goals, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs = generate_random_trajs(
         dmodel     = arm,
-        num_traj   = 1000,
-        dt         = 0.1,
-        traj_len_T = 10.0,
+        num_traj   = num_traj,
+        dt         = dt,
+        traj_len_T = traj_len_T,
         X_init     = X_init,
         X_goal     = X_goal,
         U          = U,
         X_obs      = X_obs,
         U_obs      = U_obs,
-        kp         = 1.0,
-        kd         = 0.01,
+        T_obs      = T_obs,
+        kp         = kp,
+        kd         = kd,
         dmin       = dmin,
-        alpha      = 0.01
+        alpha      = alpha
     )
+    print(f"Generated {len(x_trajs)} trajectories")
     
-    # Plot some trajectories
-    # plot_trajectories(Xrefs)
+    # -------------------- Plot some trajectories --------------------
+    plot_trajectories(x_goals, x_trajs, u_trajs, x_obs_trajs, u_obs_trajs, phi_trajs, arm, num_to_save, plot_path)
     
-    # Build and save the dataset
+    # -------------------- Build and save the dataset --------------------
     print("Building dataset...")
     train_data, test_data = build_dataset(
         name="planar_arm",
@@ -530,10 +644,9 @@ if __name__ == "__main__":
         x_obs_trajs=x_obs_trajs,
         u_obs_trajs=u_obs_trajs,
         phi_trajs=phi_trajs,
-        FI_steps=50,  # Number of steps to consider for FI
-        train_data_ratio=0.6  # Ratio of training data
+        FI_steps=FI_steps,
+        train_data_ratio=train_data_ratio,
+        root=data_path
     )
     
     print("Data collection complete!")
-    print(f"Generated {len(x_trajs)} trajectories")
-    print(f"Created {len(train_data)} training samples and {len(test_data)} test samples")
