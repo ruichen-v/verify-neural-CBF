@@ -81,10 +81,10 @@ class PlanarArm:
             # x_dot[1] = u[0] * torch.sin(x[2])
             # x_dot[2] = u[1]
             
-            if not torch.is_tensor(x): x = torch.tensor(x).to(device)
-            fx = torch.from_numpy(self.fx(x)).to(device)
-            gx = torch.from_numpy(self.gx(x)).to(device)
-            u = torch.tensor(u, dtype=torch.float64).to(device).reshape(-1, 1)
+            if not torch.is_tensor(x): x = torch.tensor(x)
+            fx = torch.from_numpy(self.fx(x))
+            gx = torch.from_numpy(self.gx(x))
+            u = torch.tensor(u, dtype=torch.float64).reshape(-1, 1)
             x_dot = fx + gx @ u
             x_dot = x_dot.reshape(-1)
         
@@ -519,8 +519,8 @@ def draw_arm(ax, arm, x, phi, color='blue'):
     link1_color = 'orange' if phi[0] > 0 else color
     link2_color = 'orange' if phi[1] > 0 else color
 
-    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=link1_color, linewidth=2)
-    ax.plot([p2[0], p3[0]], [p2[1], p3[1]], color=link2_color, linewidth=2)
+    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=link1_color, linewidth=5)
+    ax.plot([p2[0], p3[0]], [p2[1], p3[1]], color=link2_color, linewidth=5)
     ax.scatter([p1[0], p2[0], p3[0]], [p1[1], p2[1], p3[1]], color=color)
 
 def draw_obstacle(ax, x_obs, color='red'):
@@ -580,7 +580,7 @@ if __name__ == "__main__":
     # Paths for saving data and plots
     exp_name = "batch2"
     data_path = os.path.join(exp_name, "data")
-    plot_path = os.path.join(exp_name, "viz")
+    plot_path = os.path.join(exp_name, "viz_data")
     num_to_save = 10  # Number of trajectories to save for visualization
 
     # Create directories if they don't exist
